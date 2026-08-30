@@ -312,24 +312,29 @@ Padding mask: [batch_size, sequence_length]
 The repository is organized around the different stages of the project workflow.
 
 ```text
-self-supervised-collider-foundation-model/
+fcc-ee-masked-particle-modeling/
 │
-├── README.md
+├── data/
+│   └── clean_data_ecm240.root
 │
-├── 01_inspect_edm4hep.ipynb
-├── 02_build_dataset.ipynb
-├── 03_masked_particle_transformer.ipynb
-├── 04_representation_evaluation.ipynb
+├── notebooks/
+│   ├── 01_inspect_edm4hep.ipynb
+│   ├── 02_build_dataset.ipynb
+│   ├── 03_masked_particle_transformer.ipynb
+│   └── 04_representation_analysis.ipynb
 │
-├── clean_data_ecm240.root
-├── processed_collider_events.pt
+├── figures/
+│   ├── 03_PDG_Reconstruction_Loss.png
+│   ├── 04_Masked_Particle_Reconstruction_eta.png
+│   
+│   └── ...
 │
 ├── checkpoints/
-│   ├── best_model.pt
-│   └── last_model.pt
+│   ├── processed_collider_events.pt
+│   └── Readme.md
 │
-└── ...
-```
+├── README.md
+└── requirements.txt
 
 The conceptual workflow is:
 
