@@ -8,9 +8,9 @@ The project is designed as a research prototype for applying modern self-supervi
 
 ---
 
-## Overview
+# Overview
 
-Particle-collision events contain variable numbers of reconstructed particles, with each particle carrying kinematic and particle-identification information.
+Particle-collision events contain variable numbers of particles, with each particle carrying kinematic and particle-identification information.
 
 Instead of training a model directly for a single supervised classification task, this project explores a more general approach:
 
@@ -18,15 +18,15 @@ Instead of training a model directly for a single supervised classification task
 
 For each event, the model receives a sequence of particles. Each particle is represented using:
 
-* transverse momentum (`pT`)
-* pseudorapidity (`eta`)
-* azimuthal angle represented by `sin(phi)` and `cos(phi)`
-* energy
-* mass
-* electric charge
-* particle identity through a PDG-ID token
+- transverse momentum, through `log_pt`
+- pseudorapidity, `eta`
+- azimuthal angle represented by `sin_phi` and `cos_phi`
+- energy, through `log_energy`
+- mass, through `log_mass`
+- electric charge
+- particle identity through a PDG-ID token
 
-During self-supervised training, a fraction of particles is masked. The Transformer must reconstruct:
+During self-supervised training, approximately 40% of valid particles are masked. The Transformer must reconstruct:
 
 1. the masked particle's continuous features
 2. the masked particle's PDG identity
@@ -39,12 +39,12 @@ The resulting Transformer representation is then studied as an event-level laten
 
 Modern collider experiments produce extremely large and complex datasets. Traditional machine-learning approaches often train a model for a specific downstream task, such as:
 
-* event classification
-* particle identification
-* anomaly detection
-* signal/background discrimination
+- event classification
+- particle identification
+- anomaly detection
+- signal/background discrimination
 
-Such approaches can require large amounts of labelled training data and may produce representations optimized only for the task for which the model was trained.
+Such approaches can require labelled training data and may produce representations optimized primarily for the specific task for which the model was trained.
 
 Self-supervised learning provides an alternative.
 
@@ -52,31 +52,43 @@ The central idea of this project is to first learn a general representation of c
 
 This project therefore explores a collider analogue of the general strategy used by foundation models:
 
-**particle data → self-supervised pre-training → learned representation → downstream physics applications**
+```text
+Particle data
+     ↓
+Self-supervised pre-training
+     ↓
+Learned representation
+     ↓
+Downstream physics applications
+```
+
+The central question motivating this project is closely related to representation learning in scientific data:
+
+> **What can a model learn about particle-collision events when no event-class labels are provided during pre-training?**
 
 ---
 
 # Model Architecture
 
-The model is a Transformer encoder operating on sequences of particles.
+The model is a Transformer encoder operating on variable-length sequences of particles.
 
-### Particle representation
+## Particle Representation
 
 Each particle contains seven continuous features:
 
-| Feature      | Description                      |
-| ------------ | -------------------------------- |
-| `log_pt`     | Logarithm of transverse momentum |
-| `eta`        | Pseudorapidity                   |
-| `sin_phi`    | Sine of azimuthal angle          |
-| `cos_phi`    | Cosine of azimuthal angle        |
-| `log_energy` | Logarithm of energy              |
-| `log_mass`   | Logarithm of mass                |
-| `charge`     | Electric charge                  |
+| Feature | Description |
+|---|---|
+| `log_pt` | Logarithmically transformed transverse momentum |
+| `eta` | Pseudorapidity |
+| `sin_phi` | Sine of azimuthal angle |
+| `cos_phi` | Cosine of azimuthal angle |
+| `log_energy` | Logarithmically transformed energy |
+| `log_mass` | Logarithmically transformed mass |
+| `charge` | Electric charge |
 
 Particle identity is represented separately using a token corresponding to the particle's PDG ID.
 
-### Particle embedding
+## Particle Embedding
 
 The continuous features are passed through a small neural network:
 
@@ -90,24 +102,47 @@ Linear(7 → 128)
         │
         ▼
 Linear(128 → 128)
+        │
+        ▼
+128-dimensional feature embedding
 ```
 
-The PDG token is mapped into a 128-dimensional embedding.
+The PDG token is mapped into a learned 128-dimensional embedding.
 
-The continuous-feature embedding and PDG embedding are then added together to form the particle representation.
+The continuous-feature embedding and PDG embedding are added together to form the particle representation.
 
-### Transformer
+For masked particles, the complete particle representation is replaced with a learned `[MASK]` token.
+
+```text
+Continuous features ───┐
+                       ├──► Particle representation
+PDG embedding ─────────┘
+                       │
+                       ▼
+              Masked if selected
+                       │
+                       ▼
+             Transformer Encoder
+```
+
+## Transformer
 
 The particle representations are processed by a Transformer encoder with:
 
-* embedding dimension: `128`
-* attention heads: `8`
-* Transformer layers: `4`
-* feed-forward dimension: `512`
-* dropout: `0.1`
-* GELU activation
+- embedding dimension: `128`
+- attention heads: `8`
+- Transformer layers: `4`
+- feed-forward dimension: `512`
+- dropout: `0.1`
+- GELU activation
 
 The model accepts variable-length particle sequences using padding masks.
+
+The trained model contains approximately:
+
+```text
+836,391 trainable parameters
+```
 
 ---
 
@@ -115,17 +150,26 @@ The model accepts variable-length particle sequences using padding masks.
 
 Approximately 40% of the valid particles in each event are randomly masked.
 
-The model receives the remaining information and attempts to reconstruct the masked particles.
+The model receives the remaining information and attempts to reconstruct the masked particles from the surrounding event context.
 
 Two prediction heads are used.
 
-### 1. PDG reconstruction
+## 1. PDG Reconstruction
 
 The model predicts the PDG-token identity of each masked particle.
 
-The PDG vocabulary contains 31 particle categories plus a padding token.
+The PDG vocabulary contains:
 
-### 2. Continuous-feature reconstruction
+- 31 final-state particle categories
+- 1 padding token
+
+giving a total vocabulary size of:
+
+```text
+32
+```
+
+## 2. Continuous-Feature Reconstruction
 
 The model predicts the seven continuous particle features:
 
@@ -157,9 +201,31 @@ This creates a multi-task self-supervised objective:
           PDG prediction    Feature prediction
 ```
 
+The total reconstruction loss is:
+
+```text
+Total loss = Feature reconstruction loss + PDG reconstruction loss
+```
+
+Continuous features are reconstructed using mean-squared error, while PDG tokens are reconstructed using cross-entropy loss.
+
+Only masked, non-padding particles contribute to the training loss.
+
 ---
 
 # Dataset
+
+The project uses particle-level collider-event data stored in an EDM4HEP ROOT file.
+
+The initial data inspection and preprocessing select generator-level final-state particles using:
+
+```text
+generatorStatus == 1
+```
+
+Particles with nonzero three-momentum are retained for the baseline dataset.
+
+Particles within each event are sorted by descending transverse momentum to provide a deterministic sequence ordering for the Transformer prototype.
 
 The processed dataset contains:
 
@@ -192,7 +258,7 @@ PAD_ID
 VOCAB_SIZE
 ```
 
-The particle features are standardized using the training-data statistics.
+The continuous particle features are standardized using training-data statistics.
 
 The PDG IDs are converted into integer token IDs for use by the neural network.
 
@@ -200,7 +266,7 @@ The PDG IDs are converted into integer token IDs for use by the neural network.
 
 # Data Representation
 
-Each event is represented as a variable-length sequence.
+Each collider event is represented as a variable-length sequence of particles.
 
 For example:
 
@@ -225,45 +291,59 @@ Event
 └── ...
 ```
 
+Each particle also has a categorical PDG token.
+
 Since collider events contain different numbers of particles, sequences are padded within each batch.
 
 A padding mask prevents the Transformer from treating padding positions as physical particles.
+
+This allows batches to have the form:
+
+```text
+Features:     [batch_size, sequence_length, 7]
+PDG tokens:   [batch_size, sequence_length]
+Padding mask: [batch_size, sequence_length]
+```
 
 ---
 
 # Repository Structure
 
-The repository is organized around a sequence of notebooks corresponding to the different stages of the project.
+The repository is organized around the different stages of the project workflow.
 
 ```text
 self-supervised-collider-foundation-model/
 │
 ├── README.md
 │
-├── Notebook1_*.ipynb
-├── Notebook2_*.ipynb
-├── Notebook3_*.ipynb
-├── Notebook4_*.ipynb
-├── Notebook5_*.ipynb
+├── 01_inspect_edm4hep.ipynb
+├── 02_build_dataset.ipynb
+├── 03_masked_particle_transformer.ipynb
+├── 04_representation_evaluation.ipynb
 │
+├── clean_data_ecm240.root
 ├── processed_collider_events.pt
 │
 ├── checkpoints/
-│   └── best_model.pt
+│   ├── best_model.pt
+│   └── last_model.pt
 │
 └── ...
 ```
 
-The exact notebook filenames may differ. Their conceptual workflow is:
+The conceptual workflow is:
 
 ```text
-Raw collider data
+Raw EDM4HEP collider data
        │
        ▼
-Data preprocessing
+Data inspection
        │
        ▼
-Particle/event representation
+Particle-level preprocessing
+       │
+       ▼
+Variable-length event representation
        │
        ▼
 Train/validation/test split
@@ -290,35 +370,53 @@ Model evaluation
 
 # Notebook Workflow
 
-## Notebook 1 — Data Preparation
+## Notebook 1 — EDM4HEP Data Inspection
 
-The first notebook prepares the collider-event data for machine learning.
+**File:**
 
-Typical steps include:
+```text
+01_inspect_edm4hep.ipynb
+```
 
-* loading the collider-event data
-* selecting the relevant particle information
-* constructing particle-level features
-* calculating transformed quantities such as logarithmic momentum/energy/mass
-* representing the azimuthal angle using sine and cosine
-* assigning PDG tokens
-* constructing event sequences
+The first notebook inspects the EDM4HEP collider-event data.
 
-The result is a structured representation suitable for Transformer-based learning.
+The notebook includes:
+
+- opening the ROOT file
+- inspecting the available ROOT trees
+- reading the `events` tree
+- examining the particle collection
+- selecting generator-level final-state particles
+- studying event and particle multiplicities
+- examining particle kinematics
+- inspecting PDG IDs and particle distributions
+
+This stage provides an initial understanding of the collider data before constructing the machine-learning dataset.
 
 ---
 
 ## Notebook 2 — Dataset Processing
 
-The second stage prepares the final machine-learning dataset.
+**File:**
+
+```text
+02_build_dataset.ipynb
+```
+
+The second notebook prepares the final machine-learning dataset.
 
 It includes:
 
-* feature normalization
-* construction of the PDG vocabulary
-* assignment of token IDs
-* train/validation/test splitting
-* storage of processed data
+- particle selection
+- particle-level feature construction
+- logarithmic transformations of momentum, energy, and mass
+- representing the azimuthal angle using sine and cosine
+- PDG vocabulary construction
+- PDG tokenization
+- feature normalization
+- variable-length event sequences
+- train/validation/test splitting
+- storage of the processed data
 
 The resulting dataset is saved as:
 
@@ -331,37 +429,72 @@ The split used in the current experiment is:
 ```text
 Train:      36,664 events
 Validation:  4,583 events
-Test:       4,583 events
+Test:        4,583 events
 ```
 
 ---
 
 ## Notebook 3 — Model Training
 
+**File:**
+
+```text
+03_masked_particle_transformer.ipynb
+```
+
 The training notebook defines and trains the masked-particle Transformer.
 
 The main architecture is:
 
 ```text
-Particle features
-       +
-PDG embedding
-       │
-       ▼
-Particle embedding
-       │
-       ▼
-Transformer Encoder
-       │
-       ├───────────────┐
-       ▼               ▼
-PDG head          Feature head
-       │               │
-       ▼               ▼
-PDG prediction    Feature reconstruction
+7 continuous features
+        │
+        ▼
+Feature embedding ──────┐
+                        │
+PDG token               │
+        │               │
+        ▼               │
+PDG embedding ──────────┤
+                        │
+                        ▼
+              Particle representation
+                        │
+                  Mask some particles
+                        │
+                        ▼
+               Learned [MASK] token
+                        │
+                        ▼
+               Transformer Encoder
+                        │
+              ┌─────────┴─────────┐
+              ▼                   ▼
+       Feature decoder      PDG classifier
+              │                   │
+              ▼                   ▼
+       7 reconstructed       32 classes
+          features
 ```
 
-The training objective is based on reconstructing masked particles.
+The notebook includes:
+
+- loading the processed dataset
+- constructing PyTorch datasets and data loaders
+- padding variable-length events
+- creating padding masks
+- implementing random particle masking
+- building particle embeddings
+- defining the Transformer encoder
+- defining feature and PDG reconstruction heads
+- implementing the masked reconstruction loss
+- optimizer configuration
+- a full training loop
+- validation after every epoch
+- gradient clipping
+- checkpoint saving
+- best-model selection
+- training and validation loss curves
 
 The best checkpoint is saved as:
 
@@ -369,41 +502,160 @@ The best checkpoint is saved as:
 checkpoints/best_model.pt
 ```
 
+The last checkpoint is saved as:
+
+```text
+checkpoints/last_model.pt
+```
+
 The currently selected best model was obtained at:
 
 ```text
 Best epoch: 14
-Validation loss: 2.51238
+Best validation loss: 2.51238
+```
+
+The best validation loss was composed of approximately:
+
+```text
+Feature reconstruction loss: 0.98557
+PDG reconstruction loss:     1.52681
 ```
 
 ---
 
-## Notebook 4 — Model Evaluation
+## Notebook 4 — Representation Evaluation
 
-The evaluation notebook loads the best trained model and evaluates its self-supervised reconstruction performance.
+**File:**
+
+```text
+04_representation_evaluation.ipynb
+```
+
+The evaluation notebook loads the best trained model and evaluates its self-supervised reconstruction performance and learned representations.
 
 The evaluation includes:
 
-* PDG reconstruction accuracy
-* classification report
-* confusion matrix
-* continuous-feature reconstruction
-* predicted-vs-true feature plots
-* event-level embedding extraction
-* PCA visualization
-* correlation with particle multiplicity
+- masked PDG reconstruction accuracy
+- classification report
+- confusion matrix
+- continuous-feature reconstruction
+- feature-level reconstruction diagnostics
+- predicted-versus-true feature comparisons
+- particle-level latent representation extraction
+- event-level embedding extraction
+- PCA visualization
+- latent-space analysis
+- analysis of the relationship between event embeddings and particle multiplicity
 
-The model is evaluated on the held-out validation and test datasets.
+The model is evaluated on held-out validation and test datasets.
+
+The event-level embedding is constructed by aggregating particle-level Transformer outputs over valid particles.
 
 ---
 
-## Notebook 5 — Representation Analysis
+# Results
 
-The final notebook focuses on the learned event representations.
+The current results should be interpreted as results from a **baseline research prototype**, rather than a state-of-the-art or fully optimized collider foundation model.
 
-The Transformer produces a 128-dimensional representation for each event.
+The purpose of the project is to demonstrate an end-to-end self-supervised learning workflow and investigate what information the model can learn from collider-event structure without using event labels during pre-training.
 
-The particle-level Transformer outputs are aggregated over the valid particles to construct an event-level embedding.
+---
+
+## Training
+
+The model was trained for:
+
+```text
+30 epochs
+```
+
+using:
+
+```text
+AdamW optimizer
+Learning rate: 1e-4
+Weight decay:  1e-4
+Mask ratio:    40%
+```
+
+The best validation checkpoint occurred at:
+
+```text
+Epoch 14
+Validation loss: 2.51238
+```
+
+The training notebook also produces:
+
+- total training and validation loss curves
+- continuous-feature reconstruction loss curves
+- PDG reconstruction loss curves
+
+The training and validation losses remain relatively close, suggesting that this baseline configuration does not show a large train/validation gap during the 30-epoch training run.
+
+---
+
+## PDG Reconstruction
+
+The model achieves approximately:
+
+```text
+Validation accuracy: approximately 47.6–47.7%
+
+Test accuracy: approximately 47.8–47.9%
+```
+
+with approximately 40% of valid particles masked.
+
+The result demonstrates that the Transformer learns non-trivial information about particle identity from the surrounding event context.
+
+However, the classification performance is strongly influenced by the highly imbalanced particle distribution.
+
+Some particle species occur much more frequently than others, and the model can favor dominant particle classes.
+
+Therefore, overall accuracy alone should **not** be interpreted as evidence of equally strong reconstruction performance for all particle species.
+
+The classification report and confusion matrix should be considered together with the overall accuracy.
+
+Future versions should include:
+
+- per-class accuracy
+- macro F1
+- weighted F1
+- balanced accuracy
+- normalized confusion matrices
+- potentially class-weighted reconstruction losses
+
+---
+
+# Continuous-Feature Reconstruction
+
+The model also reconstructs the continuous particle features.
+
+The test-set reconstruction metrics obtained in the evaluation are:
+
+| Feature | MAE | RMSE | Correlation |
+|---|---:|---:|---:|
+| `log_pt` | 0.7634 | 1.0019 | 0.1374 |
+| `eta` | 0.7398 | 0.9941 | 0.1521 |
+| `sin_phi` | 0.8845 | 0.9891 | 0.1565 |
+| `cos_phi` | 0.8813 | 0.9872 | 0.1611 |
+| `log_energy` | 0.7821 | 1.0073 | 0.0971 |
+| `log_mass` | 0.6663 | 0.9954 | 0.0817 |
+| `charge` | 0.7271 | 0.9905 | 0.1401 |
+
+The relatively modest correlations indicate that the current model is still at an early prototype stage and that the reconstruction task can be substantially improved.
+
+These results are therefore treated as a baseline rather than a final physics result.
+
+---
+
+# Learned Event Representation
+
+A 128-dimensional event embedding is extracted from the Transformer.
+
+Particle-level Transformer outputs are aggregated over valid particles to construct an event-level representation.
 
 For the current test set:
 
@@ -425,102 +677,26 @@ Combined: 39.0%
 
 The latent representation also shows a measurable relationship with particle multiplicity.
 
----
-
-# Results
-
-## PDG Reconstruction
-
-The model achieves approximately:
+The first principal component has approximately:
 
 ```text
-Validation accuracy: 47.6%
-
-Test accuracy:       47.9%
+Pearson correlation:  r ≈ -0.357
+Spearman correlation: r ≈ -0.347
 ```
 
-with approximately 40% of valid particles masked.
+This indicates that the learned latent representation contains information related to the structure and complexity of collider events.
 
-The test set contains approximately 144,000 masked-particle predictions.
+Importantly, this does not by itself demonstrate that the representation has learned a physically optimal representation.
 
-The result demonstrates that the Transformer learns non-trivial information about particle identity from the surrounding event context.
+It is an initial diagnostic showing that the latent space is structured rather than completely random.
 
-However, the classification performance is strongly influenced by the highly imbalanced particle distribution.
-
-For example, the photon token represents a very large fraction of the masked particles, and the current model predicts this dominant class very frequently.
-
-Therefore, overall accuracy alone should **not** be interpreted as evidence of equally strong reconstruction performance for all particle species.
-
-Future versions should include class-balanced metrics and/or a weighted reconstruction loss.
-
----
-
-# Continuous-Feature Reconstruction
-
-The model also reconstructs the continuous particle features.
-
-Current test-set results are:
-
-| Feature      |    MAE |   RMSE | Correlation |
-| ------------ | -----: | -----: | ----------: |
-| `log_pt`     | 0.7634 | 1.0019 |      0.1374 |
-| `eta`        | 0.7398 | 0.9941 |      0.1521 |
-| `sin_phi`    | 0.8845 | 0.9891 |      0.1565 |
-| `cos_phi`    | 0.8813 | 0.9872 |      0.1611 |
-| `log_energy` | 0.7821 | 1.0073 |      0.0971 |
-| `log_mass`   | 0.6663 | 0.9954 |      0.0817 |
-| `charge`     | 0.7271 | 0.9905 |      0.1401 |
-
-The relatively modest correlations indicate that the current model is still at an early prototype stage and that the reconstruction task can be substantially improved.
-
-These results are therefore treated as a baseline rather than a final physics result.
-
----
-
-# Learned Event Representation
-
-A 128-dimensional event embedding is extracted from the Transformer.
-
-PCA is used to visualize the learned representation.
-
-The first two principal components explain:
-
-```text
-PC1 = 0.208
-PC2 = 0.182
-
-Total = 0.390
-```
-
-or approximately 39% of the variance.
-
-The first PCA component also shows a statistically significant correlation with particle multiplicity:
-
-```text
-Pearson r  ≈ -0.357
-Spearman r ≈ -0.347
-```
-
-This indicates that the learned latent representation contains information related to the structure/complexity of collider events.
-
-Importantly, this does not by itself demonstrate that the representation has learned a physically optimal representation. It is an initial diagnostic showing that the latent space is structured rather than completely random.
+A stronger test would involve transferring the learned representation to a downstream physics task that was not used during self-supervised training.
 
 ---
 
 # Computational Environment
 
-The current experiments were run using **CPU-only PyTorch**.
-
-Example environment:
-
-```text
-Python
-PyTorch 2.11.0
-scikit-learn
-SciPy
-NumPy
-Matplotlib
-```
+The project is implemented using Python and PyTorch.
 
 The model automatically selects the available device:
 
@@ -530,16 +706,24 @@ device = torch.device(
 )
 ```
 
-For the current environment:
+The training experiments in the project were run using CUDA with a Tesla T4 GPU.
+
+Example training environment:
 
 ```text
-CUDA available: False
-Using device: cpu
+PyTorch: 2.11.0
+CUDA available: True
+GPU: Tesla T4
 ```
 
-A GPU is therefore **not required to reproduce the evaluation notebooks**.
+The evaluation notebooks can also run on CPU, although GPU acceleration is useful for faster training and larger-scale experiments.
 
-GPU acceleration would be strongly recommended for larger-scale training experiments, larger models, or substantially larger datasets.
+A GPU is strongly recommended for:
+
+- larger datasets
+- larger Transformer models
+- extensive hyperparameter studies
+- repeated training experiments
 
 ---
 
@@ -565,7 +749,7 @@ source venv/bin/activate
 ## 3. Install dependencies
 
 ```bash
-pip install torch numpy matplotlib scikit-learn scipy jupyter
+pip install torch numpy awkward uproot matplotlib scikit-learn scipy jupyter
 ```
 
 If a `requirements.txt` file is provided in the repository, use:
@@ -593,15 +777,13 @@ jupyter lab
 Run the notebooks sequentially:
 
 ```text
-Notebook 1
-    ↓
-Notebook 2
-    ↓
-Notebook 3
-    ↓
-Notebook 4
-    ↓
-Notebook 5
+01_inspect_edm4hep.ipynb
+        ↓
+02_build_dataset.ipynb
+        ↓
+03_masked_particle_transformer.ipynb
+        ↓
+04_representation_evaluation.ipynb
 ```
 
 The later notebooks depend on files and/or model checkpoints generated by earlier stages.
@@ -610,15 +792,37 @@ The later notebooks depend on files and/or model checkpoints generated by earlie
 
 # Important Files
 
-### Processed dataset
+## Raw collider data
+
+```text
+clean_data_ecm240.root
+```
+
+Contains the input EDM4HEP collider-event data used for the project.
+
+Depending on repository size and data-sharing restrictions, the raw ROOT file may not be included in the GitHub repository.
+
+---
+
+## Processed dataset
 
 ```text
 processed_collider_events.pt
 ```
 
-Contains the processed event sequences, train/validation/test indices, normalization parameters, and PDG vocabulary.
+Contains:
 
-### Model checkpoint
+- processed event sequences
+- continuous particle features
+- PDG token sequences
+- train/validation/test indices
+- normalization parameters
+- PDG vocabulary
+- padding and vocabulary information
+
+---
+
+## Best model checkpoint
 
 ```text
 checkpoints/best_model.pt
@@ -628,72 +832,100 @@ Contains the trained Transformer model state corresponding to the best validatio
 
 ---
 
+## Last model checkpoint
+
+```text
+checkpoints/last_model.pt
+```
+
+Contains the model and optimizer state from the final training epoch.
+
+---
+
 # Limitations
 
 This repository represents a **research prototype**, not a production-ready collider foundation model.
 
 Several aspects require further development.
 
-### 1. Class imbalance
+## 1. Class Imbalance
 
 The PDG vocabulary is highly imbalanced.
 
-The current overall accuracy is therefore dominated by common particle species.
+The current overall PDG reconstruction accuracy is therefore influenced strongly by common particle species.
 
 Future evaluation should include:
 
-* per-class accuracy
-* macro F1
-* weighted F1
-* balanced accuracy
-* confusion matrices normalized by class
-* possibly class-weighted losses
+- per-class accuracy
+- macro F1
+- weighted F1
+- balanced accuracy
+- normalized confusion matrices
+- class-weighted losses
 
-### 2. Continuous-feature reconstruction
+---
+
+## 2. Continuous-Feature Reconstruction
 
 The current reconstruction correlations are relatively low.
 
 Possible improvements include:
 
-* improved feature parameterization
-* alternative reconstruction losses
-* feature-specific loss weighting
-* larger Transformer models
-* improved masking strategies
-* incorporating additional particle information
+- improved feature parameterization
+- alternative reconstruction losses
+- feature-specific loss weighting
+- larger Transformer models
+- improved masking strategies
+- incorporating additional particle information
 
-### 3. Physics-aware representations
+---
 
-The current model treats the particle sequence using a standard Transformer architecture.
+## 3. Physics-Aware Representations
+
+The current model treats each event as an ordered sequence of particles sorted by transverse momentum.
+
+This provides a simple deterministic baseline, but collider events are fundamentally more naturally described as sets of particles.
 
 Future work could investigate:
 
-* permutation-aware architectures
-* Lorentz-equivariant networks
-* particle-flow representations
-* four-momentum-based representations
-* graph neural networks
-* physics-informed positional representations
+- permutation-aware architectures
+- set Transformers
+- Lorentz-equivariant networks
+- particle-flow representations
+- four-momentum-based representations
+- graph neural networks
+- physics-informed relational information
+- physics-informed positional representations
 
-### 4. Larger-scale pre-training
+---
 
-A true collider foundation model would require significantly larger datasets and potentially larger models.
+## 4. Larger-Scale Pre-Training
 
-The present work should therefore be considered a **proof-of-concept / baseline study**.
+A true collider foundation model would require significantly larger and more diverse datasets, and potentially larger models.
 
-### 5. Downstream tasks
+The present work should therefore be considered a:
+
+```text
+Proof-of-concept / baseline study
+```
+
+rather than a full-scale foundation model.
+
+---
+
+## 5. Downstream Tasks
 
 The most important next step is to test whether the learned representation transfers to physics tasks that were not used during self-supervised training.
 
 Possible downstream tasks include:
 
-* particle identification
-* event classification
-* signal/background discrimination
-* anomaly detection
-* jet classification
-* new-physics searches
-* event reconstruction
+- particle identification
+- event classification
+- signal/background discrimination
+- anomaly detection
+- jet classification
+- new-physics searches
+- event reconstruction
 
 ---
 
@@ -701,17 +933,21 @@ Possible downstream tasks include:
 
 The project can be extended in several directions.
 
-## Short-term
+## Short-Term
 
-* Improve the masked-particle objective.
-* Introduce class-balanced PDG losses.
-* Report per-particle-species performance.
-* Optimize continuous-feature reconstruction.
-* Compare different masking ratios.
-* Compare different Transformer sizes.
-* Evaluate different event-pooling strategies.
+- Improve the masked-particle objective.
+- Introduce class-balanced PDG losses.
+- Report per-particle-species performance.
+- Optimize continuous-feature reconstruction.
+- Compare different masking ratios.
+- Compare different Transformer sizes.
+- Evaluate different event-pooling strategies.
+- Investigate separate masking strategies for PDG and continuous features.
+- Test different reconstruction loss weightings.
 
-## Medium-term
+---
+
+## Medium-Term
 
 Use the learned representation for downstream supervised tasks.
 
@@ -731,15 +967,28 @@ Classification  Anomaly  Physics
 
 This would provide a stronger test of whether the representation learned during pre-training is genuinely useful.
 
-## Long-term
+Other possible experiments include:
+
+- fine-tuning the pretrained model
+- comparing pretrained and randomly initialized models
+- linear-probe evaluations
+- anomaly detection using latent representations
+- supervised event classification using frozen embeddings
+
+---
+
+## Long-Term
 
 Investigate larger collider foundation models trained on diverse event samples and evaluate transfer between:
 
-* collision energies
-* processes
-* detector configurations
-* simulation samples
-* physics tasks
+- collision energies
+- physical processes
+- detector configurations
+- simulation samples
+- particle-level and reconstructed data
+- physics tasks
+
+A longer-term objective would be to investigate whether a self-supervised pretrained model can provide reusable representations across multiple HEP applications.
 
 ---
 
@@ -750,7 +999,7 @@ The main purpose of this project is not to claim that the current model is alrea
 Instead, it demonstrates an end-to-end research workflow:
 
 ```text
-Collider data
+EDM4HEP collider data
      │
      ▼
 Physics-motivated preprocessing
@@ -759,16 +1008,16 @@ Physics-motivated preprocessing
 Variable-length particle sequences
      │
      ▼
-Self-supervised learning
+Self-supervised masked learning
      │
      ▼
 Transformer representation
      │
      ▼
-Quantitative evaluation
+Quantitative reconstruction evaluation
      │
      ▼
-Latent-space analysis
+Event-level latent-space analysis
      │
      ▼
 Potential downstream physics applications
@@ -776,14 +1025,20 @@ Potential downstream physics applications
 
 The project combines concepts from:
 
-* High Energy Physics
-* collider event reconstruction
-* particle physics phenomenology
-* deep learning
-* Transformer architectures
-* self-supervised learning
-* representation learning
-* foundation models
+- High Energy Physics
+- collider-event data
+- EDM4HEP data formats
+- particle physics
+- deep learning
+- Transformer architectures
+- self-supervised learning
+- representation learning
+- masked modeling
+- foundation models
+
+The project is particularly intended as a hands-on exploration of the question:
+
+> **Can useful physics representations emerge from the structure of collision data without providing explicit event labels during pre-training?**
 
 ---
 
@@ -791,13 +1046,16 @@ The project combines concepts from:
 
 The project uses:
 
-* **Python**
-* **PyTorch**
-* **NumPy**
-* **SciPy**
-* **scikit-learn**
-* **Matplotlib**
-* **Jupyter**
+- **Python**
+- **PyTorch**
+- **NumPy**
+- **Awkward Array**
+- **Uproot**
+- **SciPy**
+- **scikit-learn**
+- **Matplotlib**
+- **Jupyter**
+- **EDM4HEP / ROOT-format collider data**
 
 ---
 
@@ -828,47 +1086,64 @@ If you use this repository or build upon this work, please cite the repository:
 
 Add an appropriate open-source license before publishing the repository for reuse.
 
-For example, an MIT license can be used if you want to allow broad reuse and modification of the code.
+For example, an MIT License can be used if you want to allow broad reuse and modification of the code.
 
 ---
 
 # Project Status
 
-**Research prototype — actively developing**
+**Research prototype — baseline completed**
 
 The current version demonstrates:
 
-* [x] Collider-event preprocessing
-* [x] Particle-level feature representation
-* [x] PDG tokenization
-* [x] Train/validation/test splitting
-* [x] Masked-particle self-supervised learning
-* [x] Transformer encoder
-* [x] PDG reconstruction
-* [x] Continuous-feature reconstruction
-* [x] Event-level embedding extraction
-* [x] PCA latent-space analysis
-* [x] CPU-based evaluation
+- EDM4HEP collider-data inspection
+- particle-level feature engineering
+- variable-length event representation
+- PDG tokenization
+- train/validation/test splitting
+- masked-particle self-supervised learning
+- Transformer encoder training
+- feature reconstruction
+- PDG reconstruction
+- validation-based checkpoint selection
+- test-set evaluation
+- event-level embedding extraction
+- PCA latent-space analysis
+- analysis of the relationship between latent representations and particle multiplicity
 
-Planned:
+Planned future work includes:
 
-* [ ] Class-balanced reconstruction
-* [ ] Improved continuous-feature reconstruction
-* [ ] Larger-scale training
-* [ ] Downstream classification
-* [ ] Anomaly-detection study
-* [ ] Comparison with alternative architectures
-* [ ] Physics-specific transfer-learning experiments
+- class-balanced reconstruction
+- improved continuous-feature reconstruction
+- improved masking strategies
+- larger-scale training
+- downstream classification
+- anomaly-detection studies
+- comparison with alternative architectures
+- set-based and physics-aware architectures
+- physics-specific transfer-learning experiments
 
 ---
 
-## Summary
+# Summary
 
 This repository presents a prototype self-supervised learning framework for collider events.
 
-The model learns from masked particle information rather than requiring explicit event labels during pre-training. A Transformer encoder processes variable-length particle sequences and learns representations that can be evaluated through particle reconstruction and event-level latent-space analysis.
+The project starts from EDM4HEP collider data, constructs variable-length particle sequences, and trains a Transformer to reconstruct masked particle information without requiring explicit event-class labels during pre-training.
 
-The current results demonstrate the feasibility of the approach while also identifying clear areas for improvement, particularly in class-balanced particle reconstruction and continuous-feature prediction.
+The model combines continuous particle features and PDG-token embeddings, randomly masks approximately 40% of valid particles, and uses a Transformer encoder to reconstruct:
+
+- particle identity
+- continuous particle properties
+
+The learned particle representations are then aggregated into event-level embeddings and analyzed using PCA and correlations with event properties.
+
+The current results demonstrate the feasibility of the end-to-end approach while also identifying clear areas for improvement, particularly in:
+
+- class-balanced particle reconstruction
+- continuous-feature prediction
+- physics-aware architectures
+- larger-scale pre-training
+- downstream transfer learning
 
 The longer-term goal is to investigate whether self-supervised Transformer representations can serve as reusable building blocks for multiple collider-physics applications.
-
