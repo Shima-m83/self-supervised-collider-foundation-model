@@ -1,27 +1,64 @@
-# self-supervised-collider-foundation-model
-Developed a Transformer-based foundation model prototype for collider event representation learning. The model performs self-supervised pretraining on simulated particle collision events by masking particle tokens and reconstructing continuous kinematic features and particle identities. Implemented in PyTorch and trained on CERN SWAN GPU Infrastructure.
+# Masked Particle Transformer for Collider Event Representation Learning
 
+A Transformer-based self-supervised learning pipeline for learning particle and
+event representations from high-energy collider data.
 
-Implemented a masked particle modeling approach inspired by MAE-style
-foundation models.
+## Overview
 
-Input:
-- simulated collider events
-- particle features
-- PDG identifiers
+This project explores masked modeling for particle-physics events using a
+Transformer encoder.
 
-Architecture:
-- particle feature projection
-- PDG embeddings
-- Transformer encoder
-- reconstruction heads
+Collider events are represented as variable-length sequences of final-state
+particles. Each particle is described by continuous kinematic information and
+a categorical PDG-ID token.
 
-Pretraining objective:
-- mask 40% of particles
-- reconstruct particle kinematics
-- reconstruct particle identity
+During training, 40% of valid particles are randomly masked. The Transformer
+must reconstruct information about the masked particles from the surrounding
+event context.
 
-Results:
-- trained on CERN SWAN Tesla T4 GPU
-- validation reconstruction loss monitored
-- latent event representations visualized using PCA
+The model has two reconstruction objectives:
+
+1. Continuous particle-feature reconstruction
+2. PDG-ID reconstruction
+
+No external physics labels are used to train the reconstruction task.
+
+The project covers the complete workflow from ROOT/EDM4HEP data inspection to
+dataset construction, Transformer training, checkpointing, and representation
+evaluation.
+
+---
+
+## Project pipeline
+
+```text
+EDM4HEP / ROOT data
+        │
+        ▼
+Data inspection
+        │
+        ▼
+Final-state particle selection
+        │
+        ▼
+Particle representation
+        │
+        ├── Continuous features
+        │
+        └── PDG-ID token
+        │
+        ▼
+Variable-length event dataset
+        │
+        ▼
+Masked Particle Transformer
+        │
+        ├── Feature reconstruction
+        │
+        └── PDG reconstruction
+        │
+        ▼
+Learned particle/event representations
+        │
+        ▼
+Evaluation and latent-space analysis
