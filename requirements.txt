@@ -1,5 +1,9 @@
 numpy
 matplotlib
+scikit-learn
+scipy
 torch
 uproot
 awkward
+vector
+jupyter
