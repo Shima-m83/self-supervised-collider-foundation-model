@@ -321,7 +321,7 @@ fcc-ee-masked-particle-modeling/
 │   ├── 01_inspect_edm4hep.ipynb
 │   ├── 02_build_dataset.ipynb
 │   ├── 03_masked_particle_transformer.ipynb
-│   └── 04_representation_analysis.ipynb
+│   └── 04_representation_evaluation.ipynb
 │
 ├── figures/
 │   ├── 03_PDG_Reconstruction_Loss.png
